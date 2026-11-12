@@ -15,7 +15,6 @@ use discord_client::{sanitize_title, PresencePayload};
 use logger::{log_error, log_info, show_error_dialog};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -277,8 +276,8 @@ fn main() {
         }
     };
 
-    let config_path = Path::new("config.json");
-    if let Err(err) = Config::load_or_create(config_path) {
+    let config_path = Config::default_path();
+    if let Err(err) = Config::load_or_create(&config_path) {
         let msg = format!("Failed to load configuration: {}", err);
         log_error(&msg);
         show_error_dialog("Larplife Configuration Error", &msg);

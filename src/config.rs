@@ -124,6 +124,22 @@ impl Config {
         }
     }
 
+    pub fn default_path() -> PathBuf {
+        let local = PathBuf::from("config.json");
+        if local.exists() {
+            return local;
+        }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(parent) = exe.parent()
+        {
+            let exe_dir_config = parent.join("config.json");
+            if exe_dir_config.exists() {
+                return exe_dir_config;
+            }
+        }
+        local
+    }
+
     pub fn load_or_create(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             let config = Self::default_presets();

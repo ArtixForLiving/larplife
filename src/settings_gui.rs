@@ -33,7 +33,7 @@ impl SettingsApp {
     }
 
     pub fn new() -> Self {
-        Self::new_with_path(PathBuf::from("config.json"))
+        Self::new_with_path(Config::default_path())
     }
 
     pub fn refresh_running_apps(&mut self) {
