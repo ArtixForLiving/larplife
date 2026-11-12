@@ -15,17 +15,18 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, KillTimer, LoadIconW, PostQuitMessage,
-    RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer, TrackPopupMenu,
-    TranslateMessage, IDI_APPLICATION, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
-    TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY,
-    WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW, KillTimer, LoadIconW, PostMessageW,
+    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer,
+    TrackPopupMenu, TranslateMessage, IDI_APPLICATION, MF_CHECKED, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_COMMAND,
+    WM_DESTROY, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 pub const ID_STATUS_TOGGLE: usize = 1001;
 pub const ID_RELOAD_CONFIG: usize = 1002;
 pub const ID_STARTUP_TOGGLE: usize = 1003;
 pub const ID_EXIT: usize = 1004;
+pub const ID_OPEN_SETTINGS: usize = 1005;
 
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const TIMER_EVENT_POLL_ID: usize = 1;
@@ -142,12 +143,21 @@ unsafe fn show_context_menu(hwnd: HWND) {
     };
 
     let status_text = to_wide(build_status_menu_text(paused));
+    let settings_text = to_wide("Settings...");
     let reload_text = to_wide("Reload Configuration");
     let is_startup = is_run_at_startup_enabled(APP_NAME);
     let startup_text = to_wide(build_startup_menu_text(is_startup));
     let exit_text = to_wide("Exit");
 
     unsafe {
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING,
+            ID_OPEN_SETTINGS,
+            PCWSTR(settings_text.as_ptr()),
+        );
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+
         let _ = AppendMenuW(
             hmenu,
             MF_STRING,
@@ -196,6 +206,13 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
 unsafe fn handle_menu_command(hwnd: HWND, command_id: usize) {
     match command_id {
+        ID_OPEN_SETTINGS => {
+            if let Ok(current_exe) = std::env::current_exe() {
+                let _ = std::process::Command::new(current_exe)
+                    .arg("--settings")
+                    .spawn();
+            }
+        }
         ID_STATUS_TOGGLE => {
             if let Ok(guard) = GLOBAL_STATE.lock()
                 && let Some(state) = guard.as_ref()
@@ -252,6 +269,18 @@ unsafe fn register_tray_icon(hwnd: HWND) -> bool {
     nid.szTip[..copy_len].copy_from_slice(&tip[..copy_len]);
 
     unsafe { Shell_NotifyIconW(NIM_ADD, &nid).as_bool() }
+}
+
+pub fn notify_background_process_reload() {
+    let class_name = w!("LarplifeTrayWindowClass");
+    if let Ok(hwnd) = unsafe { FindWindowW(class_name, PCWSTR::null()) }
+        && !hwnd.is_invalid()
+        && !hwnd.0.is_null()
+    {
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(ID_RELOAD_CONFIG), LPARAM(0));
+        }
+    }
 }
 
 pub fn run_tray_ui(

@@ -246,6 +246,10 @@ pub fn current_unix_seconds() -> i64 {
         .as_secs() as i64
 }
 
+pub fn is_settings_mode(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--settings")
+}
+
 fn main() {
     let _instance_guard = match acquire_single_instance(r"Local\larplife_single_instance_mutex") {
         Ok(guard) => guard,
@@ -295,6 +299,19 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use window_reader::ActiveWindow;
+
+    #[test]
+    fn detects_settings_mode_from_args() {
+        assert!(is_settings_mode(&[
+            "larplife.exe".to_string(),
+            "--settings".to_string()
+        ]));
+        assert!(!is_settings_mode(&["larplife.exe".to_string()]));
+        assert!(!is_settings_mode(&[
+            "larplife.exe".to_string(),
+            "--other".to_string()
+        ]));
+    }
 
     #[test]
     fn single_instance_mutex_blocks_duplicate_and_releases_on_drop() {
