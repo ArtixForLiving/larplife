@@ -3,6 +3,8 @@
 mod config;
 mod discord_client;
 mod logger;
+mod process_list;
+mod settings_gui;
 mod startup;
 mod tray;
 mod window_reader;
@@ -245,7 +247,21 @@ pub fn current_unix_seconds() -> i64 {
         .as_secs() as i64
 }
 
+pub fn is_settings_mode(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--settings")
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if is_settings_mode(&args) {
+        if let Err(err) = settings_gui::run_settings_gui() {
+            let msg = format!("Failed to run settings GUI: {}", err);
+            log_error(&msg);
+            show_error_dialog("Larplife Settings Error", &msg);
+        }
+        return;
+    }
+
     let _instance_guard = match acquire_single_instance(r"Local\larplife_single_instance_mutex") {
         Ok(guard) => guard,
         Err(InstanceAcquireError::AlreadyRunning) => {
@@ -294,6 +310,19 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use window_reader::ActiveWindow;
+
+    #[test]
+    fn detects_settings_mode_from_args() {
+        assert!(is_settings_mode(&[
+            "larplife.exe".to_string(),
+            "--settings".to_string()
+        ]));
+        assert!(!is_settings_mode(&["larplife.exe".to_string()]));
+        assert!(!is_settings_mode(&[
+            "larplife.exe".to_string(),
+            "--other".to_string()
+        ]));
+    }
 
     #[test]
     fn single_instance_mutex_blocks_duplicate_and_releases_on_drop() {

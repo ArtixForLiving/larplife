@@ -167,6 +167,31 @@ impl Config {
         Ok(config)
     }
 
+    pub fn save_to_file(&self, path: &Path) -> Result<(), ConfigError> {
+        self.validate()?;
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|source| ConfigError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+
+        let serialized = serde_json::to_string_pretty(self).map_err(|err| {
+            ConfigError::Validation {
+                message: format!("Failed to serialize config: {}", err),
+            }
+        })?;
+
+        fs::write(path, serialized).map_err(|source| ConfigError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.check_interval_seconds == 0 {
             return Err(ConfigError::Validation {
@@ -289,5 +314,22 @@ mod tests {
         let found = cfg.find_app("PHOTOSHOP.EXE").expect("should match Photoshop.exe");
         assert_eq!(found.app_name, "Adobe Photoshop");
         assert!(cfg.find_app("unknown.exe").is_none());
+    }
+
+    #[test]
+    fn saves_and_reloads_config_cleanly() {
+        let path = temp_config_path("save");
+        let mut cfg = Config::default_presets();
+        cfg.check_interval_seconds = 5;
+        cfg.apps[0].app_name = "Custom App".to_string();
+
+        cfg.save_to_file(&path).expect("save must succeed");
+        assert!(path.exists());
+
+        let loaded = Config::load_or_create(&path).expect("load must succeed");
+        assert_eq!(loaded.check_interval_seconds, 5);
+        assert_eq!(loaded.apps[0].app_name, "Custom App");
+
+        let _ = fs::remove_file(&path);
     }
 }
