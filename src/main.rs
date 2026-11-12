@@ -4,6 +4,7 @@ mod config;
 mod discord_client;
 mod logger;
 mod process_list;
+mod settings_gui;
 mod startup;
 mod tray;
 mod window_reader;
@@ -251,6 +252,16 @@ pub fn is_settings_mode(args: &[String]) -> bool {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if is_settings_mode(&args) {
+        if let Err(err) = settings_gui::run_settings_gui() {
+            let msg = format!("Failed to run settings GUI: {}", err);
+            log_error(&msg);
+            show_error_dialog("Larplife Settings Error", &msg);
+        }
+        return;
+    }
+
     let _instance_guard = match acquire_single_instance(r"Local\larplife_single_instance_mutex") {
         Ok(guard) => guard,
         Err(InstanceAcquireError::AlreadyRunning) => {

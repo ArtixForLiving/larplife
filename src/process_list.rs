@@ -93,46 +93,45 @@ pub fn get_running_applications() -> Vec<RunningAppInfo> {
     }
 
     // Fallback: If no visible window found (e.g. headless environment), enumerate processes via Toolhelp32
-    if apps.is_empty() {
-        if let Ok(snapshot) = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) } {
-            if snapshot != INVALID_HANDLE_VALUE {
-                let mut entry = PROCESSENTRY32W {
-                    dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-                    ..Default::default()
-                };
+    if apps.is_empty()
+        && let Ok(snapshot) = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+        && snapshot != INVALID_HANDLE_VALUE
+    {
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
 
-                if unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok() {
-                    loop {
-                        let name_len = entry
-                            .szExeFile
-                            .iter()
-                            .position(|&c| c == 0)
-                            .unwrap_or(entry.szExeFile.len());
-                        let exe_name = String::from_utf16_lossy(&entry.szExeFile[..name_len]);
+        if unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok() {
+            loop {
+                let name_len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let exe_name = String::from_utf16_lossy(&entry.szExeFile[..name_len]);
 
-                        if !exe_name.trim().is_empty()
-                            && !is_transient_process(&exe_name)
-                            && !apps
-                                .iter()
-                                .any(|a| a.process_name.eq_ignore_ascii_case(&exe_name))
-                        {
-                            apps.push(RunningAppInfo {
-                                process_name: exe_name.clone(),
-                                window_title: exe_name,
-                            });
-                        }
-
-                        if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
-                            break;
-                        }
-                    }
+                if !exe_name.trim().is_empty()
+                    && !is_transient_process(&exe_name)
+                    && !apps
+                        .iter()
+                        .any(|a| a.process_name.eq_ignore_ascii_case(&exe_name))
+                {
+                    apps.push(RunningAppInfo {
+                        process_name: exe_name.clone(),
+                        window_title: exe_name,
+                    });
                 }
-                let _ = unsafe { CloseHandle(snapshot) };
+
+                if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
+                    break;
+                }
             }
         }
+        let _ = unsafe { CloseHandle(snapshot) };
     }
 
-    apps.sort_by(|a, b| a.process_name.to_lowercase().cmp(&b.process_name.to_lowercase()));
+    apps.sort_by_key(|a| a.process_name.to_lowercase());
     apps
 }
 
