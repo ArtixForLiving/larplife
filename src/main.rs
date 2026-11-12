@@ -1,5 +1,6 @@
 mod config;
 mod discord_client;
+mod logger;
 mod window_reader;
 
 use config::{AppConfig, Config};
