@@ -110,6 +110,29 @@ pub fn sanitize_title(raw_title: &str, app: &AppConfig) -> String {
     trimmed_result.to_string()
 }
 
+pub fn build_activity(payload: &PresencePayload) -> activity::Activity<'static> {
+    let formatted_details = format_discord_text(&payload.details);
+    let formatted_state = format_discord_text(&payload.state);
+
+    let mut activity = activity::Activity::new()
+        .details(formatted_details)
+        .state(formatted_state)
+        .timestamps(activity::Timestamps::new().start(payload.start_timestamp));
+
+    let key_trimmed = payload.logo_key.trim();
+    let text_trimmed = payload.logo_text.trim();
+
+    if !key_trimmed.is_empty() {
+        let mut assets = activity::Assets::new().large_image(key_trimmed.to_string());
+        if !text_trimmed.is_empty() {
+            assets = assets.large_text(text_trimmed.to_string());
+        }
+        activity = activity.assets(assets);
+    }
+
+    activity
+}
+
 pub struct DiscordClient {
     pub current_app_id: Option<String>,
     ipc: Option<DiscordIpcClient>,
@@ -163,18 +186,7 @@ impl DiscordClient {
             }
         }
 
-        let formatted_details = format_discord_text(&payload.details);
-        let formatted_state = format_discord_text(&payload.state);
-
-        let activity = activity::Activity::new()
-            .details(&formatted_details)
-            .state(&formatted_state)
-            .timestamps(activity::Timestamps::new().start(payload.start_timestamp))
-            .assets(
-                activity::Assets::new()
-                    .large_image(&payload.logo_key)
-                    .large_text(&payload.logo_text),
-            );
+        let activity = build_activity(payload);
 
         if let Some(client) = self.ipc.as_mut() {
             match client.set_activity(activity) {
@@ -304,5 +316,32 @@ mod tests {
 
         let result_spaces = sanitize_title(r"D:\My Secret Client\Final Cut\video edit.mp4 - CapCut", &app);
         assert_eq!(result_spaces, "video edit.mp4 - CapCut");
+    }
+
+    #[test]
+    fn build_activity_omits_empty_assets_and_formats_text() {
+        let empty_assets_payload = PresencePayload {
+            discord_app_id: "1182390998877665544".to_string(),
+            details: "A".to_string(),
+            state: "Working".to_string(),
+            logo_key: "".to_string(),
+            logo_text: "".to_string(),
+            start_timestamp: 1_700_000_000,
+        };
+
+        let json = serde_json::to_value(build_activity(&empty_assets_payload))
+            .expect("activity must serialize");
+        assert_eq!(json["details"], "A ");
+        assert_eq!(json["state"], "Working");
+        assert!(json.get("assets").is_none());
+
+        let with_key_only = PresencePayload {
+            logo_key: "blender_logo".to_string(),
+            ..empty_assets_payload
+        };
+        let json2 =
+            serde_json::to_value(build_activity(&with_key_only)).expect("activity must serialize");
+        assert_eq!(json2["assets"]["large_image"], "blender_logo");
+        assert!(json2["assets"].get("large_text").is_none());
     }
 }
