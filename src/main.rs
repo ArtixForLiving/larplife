@@ -16,7 +16,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::mpsc::channel;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tray::run_tray_ui;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
@@ -292,6 +292,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use window_reader::ActiveWindow;
 
     #[test]

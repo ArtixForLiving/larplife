@@ -3,19 +3,23 @@ use crate::startup::{is_run_at_startup_enabled, set_run_at_startup};
 use crate::worker::{WorkerCommand, WorkerEvent};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Mutex;
+use std::time::Duration;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, KillTimer, LoadIconW, PostQuitMessage,
-    RegisterClassW, SetForegroundWindow, SetTimer, TrackPopupMenu, TranslateMessage,
-    IDI_APPLICATION, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, TPM_BOTTOMALIGN,
-    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WM_TIMER,
-    WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer, TrackPopupMenu,
+    TranslateMessage, IDI_APPLICATION, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+    TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY,
+    WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
 pub const ID_STATUS_TOGGLE: usize = 1001;
@@ -26,6 +30,8 @@ pub const ID_EXIT: usize = 1004;
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const TIMER_EVENT_POLL_ID: usize = 1;
 const APP_NAME: &str = "larplife";
+
+static WM_TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
 pub fn build_status_menu_text(paused: bool) -> &'static str {
     if paused {
@@ -53,7 +59,7 @@ struct TrayState {
     event_rx: Receiver<WorkerEvent>,
 }
 
-static mut GLOBAL_STATE: Option<TrayState> = None;
+static GLOBAL_STATE: Mutex<Option<TrayState>> = Mutex::new(None);
 
 unsafe extern "system" fn tray_window_proc(
     hwnd: HWND,
@@ -61,6 +67,13 @@ unsafe extern "system" fn tray_window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let taskbar_created = WM_TASKBAR_CREATED.load(Ordering::Relaxed);
+    if taskbar_created != 0 && msg == taskbar_created {
+        // Explorer restarted: re-register the tray icon
+        unsafe { register_tray_icon(hwnd) };
+        return LRESULT(0);
+    }
+
     match msg {
         WM_TRAY_CALLBACK => {
             let event = lparam.0 as u32;
@@ -70,13 +83,13 @@ unsafe extern "system" fn tray_window_proc(
             LRESULT(0)
         }
         WM_COMMAND => {
-            let command_id = wparam.0 as usize;
+            let command_id = wparam.0;
             unsafe { handle_menu_command(hwnd, command_id) };
             LRESULT(0)
         }
         WM_TIMER => {
             if wparam.0 == TIMER_EVENT_POLL_ID {
-                unsafe { poll_worker_events() };
+                poll_worker_events();
             }
             LRESULT(0)
         }
@@ -91,9 +104,10 @@ unsafe extern "system" fn tray_window_proc(
     }
 }
 
-unsafe fn poll_worker_events() {
-    let state_opt = unsafe { &mut *(&raw mut GLOBAL_STATE) };
-    if let Some(state) = state_opt {
+fn poll_worker_events() {
+    if let Ok(mut guard) = GLOBAL_STATE.lock()
+        && let Some(state) = guard.as_mut()
+    {
         while let Ok(event) = state.event_rx.try_recv() {
             match event {
                 WorkerEvent::ConfigReloaded {
@@ -116,9 +130,10 @@ unsafe fn poll_worker_events() {
 }
 
 unsafe fn show_context_menu(hwnd: HWND) {
-    let state = match unsafe { &*(&raw const GLOBAL_STATE) } {
-        Some(s) => s,
-        None => return,
+    let paused = if let Ok(guard) = GLOBAL_STATE.lock() {
+        guard.as_ref().map(|s| s.paused).unwrap_or(false)
+    } else {
+        false
     };
 
     let hmenu = match unsafe { CreatePopupMenu() } {
@@ -126,7 +141,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         Err(_) => return,
     };
 
-    let status_text = to_wide(build_status_menu_text(state.paused));
+    let status_text = to_wide(build_status_menu_text(paused));
     let reload_text = to_wide("Reload Configuration");
     let is_startup = is_run_at_startup_enabled(APP_NAME);
     let startup_text = to_wide(build_startup_menu_text(is_startup));
@@ -180,17 +195,20 @@ unsafe fn show_context_menu(hwnd: HWND) {
 }
 
 unsafe fn handle_menu_command(hwnd: HWND, command_id: usize) {
-    let state = match unsafe { &mut *(&raw mut GLOBAL_STATE) } {
-        Some(s) => s,
-        None => return,
-    };
-
     match command_id {
         ID_STATUS_TOGGLE => {
-            let _ = state.cmd_tx.send(WorkerCommand::TogglePause);
+            if let Ok(guard) = GLOBAL_STATE.lock()
+                && let Some(state) = guard.as_ref()
+            {
+                let _ = state.cmd_tx.send(WorkerCommand::TogglePause);
+            }
         }
         ID_RELOAD_CONFIG => {
-            let _ = state.cmd_tx.send(WorkerCommand::ReloadConfig);
+            if let Ok(guard) = GLOBAL_STATE.lock()
+                && let Some(state) = guard.as_ref()
+            {
+                let _ = state.cmd_tx.send(WorkerCommand::ReloadConfig);
+            }
         }
         ID_STARTUP_TOGGLE => {
             let current = is_run_at_startup_enabled(APP_NAME);
@@ -200,7 +218,11 @@ unsafe fn handle_menu_command(hwnd: HWND, command_id: usize) {
             }
         }
         ID_EXIT => {
-            let _ = state.cmd_tx.send(WorkerCommand::Shutdown);
+            if let Ok(guard) = GLOBAL_STATE.lock()
+                && let Some(state) = guard.as_ref()
+            {
+                let _ = state.cmd_tx.send(WorkerCommand::Shutdown);
+            }
             unsafe {
                 let _ = DestroyWindow(hwnd);
             }
@@ -209,17 +231,43 @@ unsafe fn handle_menu_command(hwnd: HWND, command_id: usize) {
     }
 }
 
+unsafe fn register_tray_icon(hwnd: HWND) -> bool {
+    let hicon = match unsafe { LoadIconW(None, IDI_APPLICATION) } {
+        Ok(h) => h,
+        Err(_) => return false,
+    };
+
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+        uCallbackMessage: WM_TRAY_CALLBACK,
+        hIcon: hicon,
+        ..Default::default()
+    };
+
+    let tip = to_wide("larplife - Discord RPC");
+    let copy_len = tip.len().min(nid.szTip.len());
+    nid.szTip[..copy_len].copy_from_slice(&tip[..copy_len]);
+
+    unsafe { Shell_NotifyIconW(NIM_ADD, &nid).as_bool() }
+}
+
 pub fn run_tray_ui(
     cmd_tx: Sender<WorkerCommand>,
     event_rx: Receiver<WorkerEvent>,
 ) -> Result<(), String> {
-    unsafe {
-        GLOBAL_STATE = Some(TrayState {
+    if let Ok(mut guard) = GLOBAL_STATE.lock() {
+        *guard = Some(TrayState {
             paused: false,
             cmd_tx,
             event_rx,
         });
     }
+
+    let hinstance = unsafe { GetModuleHandleW(None) }
+        .map_err(|e| format!("Failed to get module handle: {}", e))?;
 
     let class_name = w!("LarplifeTrayWindowClass");
     let window_title = w!("Larplife Tray Message Window");
@@ -228,6 +276,7 @@ pub fn run_tray_ui(
         .map_err(|e| format!("Failed to load system icon: {}", e))?;
 
     let wnd_class = WNDCLASSW {
+        hInstance: hinstance.into(),
         lpfnWndProc: Some(tray_window_proc),
         lpszClassName: class_name,
         hIcon: hicon,
@@ -251,36 +300,34 @@ pub fn run_tray_ui(
             0,
             None,
             None,
-            None,
+            Some(hinstance.into()),
             None,
         )
     }
     .map_err(|e| format!("Failed to create tray window: {}", e))?;
 
-    let mut nid = NOTIFYICONDATAW {
-        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-        hWnd: hwnd,
-        uID: 1,
-        uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
-        uCallbackMessage: WM_TRAY_CALLBACK,
-        hIcon: hicon,
-        ..Default::default()
-    };
+    let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
+    WM_TASKBAR_CREATED.store(taskbar_created, Ordering::Relaxed);
 
-    let tip = to_wide("larplife - Discord RPC");
-    let copy_len = tip.len().min(nid.szTip.len());
-    nid.szTip[..copy_len].copy_from_slice(&tip[..copy_len]);
+    // Attempt to register tray icon with retry loop
+    let mut icon_added = false;
+    for _ in 0..5 {
+        if unsafe { register_tray_icon(hwnd) } {
+            icon_added = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
 
-    let add_res = unsafe { Shell_NotifyIconW(NIM_ADD, &nid) };
-    if !add_res.as_bool() {
-        return Err("Failed to add system tray icon".to_string());
+    if icon_added {
+        log_info("System tray icon added successfully.");
+    } else {
+        log_info("System tray icon not available in current desktop session; background activity tracker remains active.");
     }
 
     unsafe {
         SetTimer(Some(hwnd), TIMER_EVENT_POLL_ID, 500, None);
     }
-
-    log_info("System tray initialized successfully. Entering message loop.");
 
     let mut msg = MSG::default();
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
@@ -291,14 +338,17 @@ pub fn run_tray_ui(
     }
 
     unsafe {
-        let mut del_nid = NOTIFYICONDATAW {
+        let del_nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd,
             uID: 1,
             ..Default::default()
         };
-        let _ = Shell_NotifyIconW(NIM_DELETE, &mut del_nid);
-        GLOBAL_STATE = None;
+        let _ = Shell_NotifyIconW(NIM_DELETE, &del_nid);
+    }
+
+    if let Ok(mut guard) = GLOBAL_STATE.lock() {
+        *guard = None;
     }
 
     log_info("Tray message loop terminated.");
