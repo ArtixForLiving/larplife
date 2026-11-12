@@ -3,6 +3,7 @@
 mod config;
 mod discord_client;
 mod logger;
+mod process_list;
 mod startup;
 mod tray;
 mod window_reader;
