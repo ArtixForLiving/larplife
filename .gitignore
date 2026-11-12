@@ -1,0 +1,5 @@
+/target/
+/.superpowers/
+config.json
+larplife.log
+*.pdb
