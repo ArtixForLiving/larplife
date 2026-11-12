@@ -1,7 +1,9 @@
 mod config;
 mod discord_client;
 mod logger;
+mod startup;
 mod window_reader;
+mod worker;
 
 use config::{AppConfig, Config};
 use discord_client::{sanitize_title, DiscordClient, PresencePayload};
