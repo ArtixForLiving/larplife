@@ -143,10 +143,10 @@ impl DiscordClient {
         }
 
         if self.ipc.is_none() {
-            if let Some(last_attempt) = self.last_connect_attempt {
-                if now.duration_since(last_attempt) < self.connect_cooldown {
-                    return Err("Discord reconnect cooldown active".to_string());
-                }
+            if let Some(last_attempt) = self.last_connect_attempt
+                && now.duration_since(last_attempt) < self.connect_cooldown
+            {
+                return Err("Discord reconnect cooldown active".to_string());
             }
 
             self.last_connect_attempt = Some(now);
@@ -202,13 +202,13 @@ impl DiscordClient {
         }
 
         self.last_payload = None;
-        if let Some(client) = self.ipc.as_mut() {
-            if let Err(err) = client.clear_activity() {
-                let _ = client.close();
-                self.ipc = None;
-                self.current_app_id = None;
-                return Err(format!("Failed to clear activity: {}", err));
-            }
+        if let Some(client) = self.ipc.as_mut()
+            && let Err(err) = client.clear_activity()
+        {
+            let _ = client.close();
+            self.ipc = None;
+            self.current_app_id = None;
+            return Err(format!("Failed to clear activity: {}", err));
         }
 
         Ok(())

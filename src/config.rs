@@ -129,13 +129,13 @@ impl Config {
             let config = Self::default_presets();
             config.validate()?;
 
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    fs::create_dir_all(parent).map_err(|source| ConfigError::Io {
-                        path: parent.to_path_buf(),
-                        source,
-                    })?;
-                }
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent).map_err(|source| ConfigError::Io {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
             }
 
             let serialized = serde_json::to_string_pretty(&config).map_err(|err| {

@@ -192,18 +192,19 @@ impl PresenceTracker {
         if let Some(active) = &mut self.active {
             let app = config.find_app(&active.process_name);
 
-            if let Some(app) = app {
-                if app.keep_active_in_background && is_bg_running(&active.process_name) {
-                    active.grace_started_at = None;
-                    return TrackerAction::Set(PresencePayload {
-                        discord_app_id: app.discord_app_id.clone(),
-                        details: active.last_details.clone(),
-                        state: app.state_text.clone(),
-                        logo_key: app.logo_key.clone(),
-                        logo_text: app.logo_text.clone(),
-                        start_timestamp: active.start_timestamp,
-                    });
-                }
+            if let Some(app) = app
+                && app.keep_active_in_background
+                && is_bg_running(&active.process_name)
+            {
+                active.grace_started_at = None;
+                return TrackerAction::Set(PresencePayload {
+                    discord_app_id: app.discord_app_id.clone(),
+                    details: active.last_details.clone(),
+                    state: app.state_text.clone(),
+                    logo_key: app.logo_key.clone(),
+                    logo_text: app.logo_text.clone(),
+                    start_timestamp: active.start_timestamp,
+                });
             }
 
             match active.grace_started_at {
