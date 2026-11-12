@@ -1,20 +1,28 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod config;
 mod discord_client;
 mod logger;
 mod startup;
+mod tray;
 mod window_reader;
 mod worker;
 
 use config::{AppConfig, Config};
-use discord_client::{sanitize_title, DiscordClient, PresencePayload};
+use discord_client::{sanitize_title, PresencePayload};
+use logger::{log_error, log_info, show_error_dialog};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::mpsc::channel;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tray::run_tray_ui;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
 use windows::Win32::System::Threading::CreateMutexW;
-use window_reader::{is_process_running, read_foreground_window, ForegroundReading};
+use window_reader::ForegroundReading;
+use worker::{run_worker, WorkerCommand};
 
 #[derive(Debug)]
 pub struct InstanceGuard(HANDLE);
@@ -241,58 +249,44 @@ fn main() {
     let _instance_guard = match acquire_single_instance(r"Local\larplife_single_instance_mutex") {
         Ok(guard) => guard,
         Err(InstanceAcquireError::AlreadyRunning) => {
-            eprintln!("Larplife is already running on this machine. Exiting.");
+            log_info("Larplife is already running on this machine. Exiting.");
+            show_error_dialog("Larplife", "Larplife is already running in the background.");
             std::process::exit(0);
         }
         Err(InstanceAcquireError::Win32(err)) => {
-            eprintln!("Failed to acquire single instance lock: {}", err);
+            let msg = format!("Failed to acquire single instance lock: {}", err);
+            log_error(&msg);
+            show_error_dialog("Larplife Startup Error", &msg);
             std::process::exit(1);
         }
     };
 
     let config_path = Path::new("config.json");
-    let config = match Config::load_or_create(config_path) {
-        Ok(cfg) => cfg,
-        Err(err) => {
-            eprintln!("Failed to load configuration: {}", err);
-            std::process::exit(1);
-        }
-    };
-
-    println!("Larplife v3.0 Phase 1 MVP started.");
-    println!(
-        "Tracking {} configured applications. Polling interval: {}s, Clear timeout: {}s",
-        config.apps.len(),
-        config.check_interval_seconds,
-        config.clear_timeout_seconds
-    );
-
-    let mut discord_client = DiscordClient::new();
-    let mut tracker = PresenceTracker::new();
-
-    loop {
-        let reading = read_foreground_window();
-        let now = Instant::now();
-        let unix_secs = current_unix_seconds();
-
-        let action = tracker.step(&config, reading, now, unix_secs, is_process_running);
-
-        match action {
-            TrackerAction::Set(payload) => {
-                if let Err(err) = discord_client.update_presence(&payload, now) {
-                    eprintln!("Discord RPC status: {}", err);
-                }
-            }
-            TrackerAction::Clear => {
-                if let Err(err) = discord_client.clear_presence() {
-                    eprintln!("Failed to clear Discord presence: {}", err);
-                }
-            }
-            TrackerAction::None => {}
-        }
-
-        std::thread::sleep(Duration::from_secs(config.check_interval_seconds));
+    if let Err(err) = Config::load_or_create(config_path) {
+        let msg = format!("Failed to load configuration: {}", err);
+        log_error(&msg);
+        show_error_dialog("Larplife Configuration Error", &msg);
+        std::process::exit(1);
     }
+
+    log_info("Larplife v3.0 Phase 2 starting background worker and system tray.");
+
+    let (cmd_tx, cmd_rx) = channel();
+    let (event_tx, event_rx) = channel();
+
+    let worker_handle = thread::spawn(move || {
+        run_worker(cmd_rx, event_tx);
+    });
+
+    if let Err(err) = run_tray_ui(cmd_tx.clone(), event_rx) {
+        let msg = format!("System tray UI encountered an error: {}", err);
+        log_error(&msg);
+        show_error_dialog("Larplife Tray Error", &msg);
+    }
+
+    let _ = cmd_tx.send(WorkerCommand::Shutdown);
+    let _ = worker_handle.join();
+    log_info("Larplife shutdown complete.");
 }
 
 #[cfg(test)]
