@@ -1,5 +1,8 @@
 /target/
 /.superpowers/
+/docs/
 config.json
 larplife.log
+ANALISIS_CELAH_TEKNIS.md
+generate_report.py
 *.pdb
