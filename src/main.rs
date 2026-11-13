@@ -246,12 +246,23 @@ pub fn current_unix_seconds() -> i64 {
         .as_secs() as i64
 }
 
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub fn is_version_mode(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--version" || arg == "-v")
+}
+
 pub fn is_settings_mode(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--settings")
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if is_version_mode(&args) {
+        show_error_dialog("Larplife", &format!("larplife v{}", APP_VERSION));
+        return;
+    }
+
     if is_settings_mode(&args) {
         if let Err(err) = settings_gui::run_settings_gui() {
             let msg = format!("Failed to run settings GUI: {}", err);
@@ -284,7 +295,10 @@ fn main() {
         std::process::exit(1);
     }
 
-    log_info("Larplife v3.0 Phase 2 starting background worker and system tray.");
+    log_info(&format!(
+        "Larplife v{} starting background worker and system tray.",
+        APP_VERSION
+    ));
 
     let (cmd_tx, cmd_rx) = channel();
     let (event_tx, event_rx) = channel();
@@ -310,6 +324,20 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use window_reader::ActiveWindow;
+
+    #[test]
+    fn detects_version_mode_from_args() {
+        assert!(is_version_mode(&[
+            "larplife.exe".to_string(),
+            "--version".to_string()
+        ]));
+        assert!(is_version_mode(&[
+            "larplife.exe".to_string(),
+            "-v".to_string()
+        ]));
+        assert!(!is_version_mode(&["larplife.exe".to_string()]));
+        assert_eq!(APP_VERSION, "0.2.0");
+    }
 
     #[test]
     fn detects_settings_mode_from_args() {

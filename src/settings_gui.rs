@@ -128,7 +128,7 @@ impl eframe::App for SettingsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Larplife Settings");
+                ui.heading(format!("Larplife v{} Settings", env!("CARGO_PKG_VERSION")));
                 ui.separator();
                 ui.label("Poll Interval (s):");
                 ui.add(egui::DragValue::new(&mut self.config.check_interval_seconds).range(1..=60));
@@ -308,16 +308,17 @@ impl eframe::App for SettingsApp {
 }
 
 pub fn run_settings_gui() -> Result<(), eframe::Error> {
+    let window_title = format!("larplife v{} - Settings", env!("CARGO_PKG_VERSION"));
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([760.0, 560.0])
             .with_min_inner_size([640.0, 460.0])
-            .with_title("larplife - Settings"),
+            .with_title(&window_title),
         ..Default::default()
     };
 
     eframe::run_native(
-        "larplife - Settings",
+        &window_title,
         native_options,
         Box::new(|_cc| Ok(Box::new(SettingsApp::new()))),
     )

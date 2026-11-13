@@ -267,7 +267,7 @@ unsafe fn register_tray_icon(hwnd: HWND) -> bool {
         ..Default::default()
     };
 
-    let tip = to_wide("larplife - Discord RPC");
+    let tip = to_wide(&format!("larplife v{} - Discord RPC", env!("CARGO_PKG_VERSION")));
     let copy_len = tip.len().min(nid.szTip.len());
     nid.szTip[..copy_len].copy_from_slice(&tip[..copy_len]);
 

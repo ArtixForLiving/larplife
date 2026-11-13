@@ -136,7 +136,7 @@ def create_report(output_pdf_path):
     story = []
 
     # Title Banner
-    story.append(Paragraph("LAPORAN HASIL KERJA PENGEMBANGAN LARPLIFE v3.0", title_style))
+    story.append(Paragraph("LAPORAN HASIL KERJA PENGEMBANGAN LARPLIFE v0.2.0", title_style))
     story.append(Paragraph("Aplikasi Discord Rich Presence Otomatis Berbasis 100% Rust Murni untuk Windows 10/11 (64-bit)", subtitle_style))
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#5865F2'), spaceAfter=10))
 
@@ -152,7 +152,7 @@ def create_report(output_pdf_path):
         ],
         [
             Paragraph("<b>Target Pemakaian RAM:</b> &lt; 10 MB (Aktual: 2 - 6 MB)", body_style),
-            Paragraph("<b>Hasil Unit Test:</b> 37 Lulus / 0 Gagal (100% Green)", body_style),
+            Paragraph("<b>Hasil Unit Test:</b> 40 Lulus / 0 Gagal (100% Green)", body_style),
         ]
     ]
     meta_table = Table(meta_data, colWidths=[270, 260])
@@ -171,7 +171,7 @@ def create_report(output_pdf_path):
     # 1. Ringkasan Eksekutif
     story.append(Paragraph("1. Ringkasan Eksekutif & Sasaran Capaian", h1_style))
     story.append(Paragraph(
-        "Proyek <b>larplife v3.0</b> berhasil dikembangkan secara tuntas menggunakan bahasa pemrograman <b>Rust murni</b> tanpa menggunakan interpreter eksternal (seperti Node.js, Electron, atau Python). Seluruh celah teknis Windows dan batasan Discord RPC yang diuraikan dalam PRD v3.0 telah diimplementasikan dengan standar keamanan tingkat tinggi (RAII handles, toleran terhadap Administrator privilege, sanitasi privasi judul file, switch debounce anti-spam, serta pemisahan proses GUI agar background RAM tetap berada di kisaran <b>2 - 6 MB RAM</b>).",
+        "Proyek <b>larplife v0.2.0</b> berhasil dikembangkan secara tuntas menggunakan bahasa pemrograman <b>Rust murni</b> tanpa menggunakan interpreter eksternal (seperti Node.js, Electron, atau Python). Seluruh celah teknis Windows dan batasan Discord RPC yang diuraikan dalam PRD telah diimplementasikan dengan standar keamanan tingkat tinggi (RAII handles, toleran terhadap Administrator privilege, sanitasi privasi judul file, switch debounce anti-spam, serta pemisahan proses GUI agar background RAM tetap berada di kisaran <b>2 - 6 MB RAM</b>).",
         body_style
     ))
 
@@ -434,5 +434,5 @@ def create_report(output_pdf_path):
     print(f"Report generated successfully at: {output_pdf_path}")
 
 if __name__ == "__main__":
-    target_path = r"C:\Users\Artix\Documents\Laporan_Hasil_Kerja_Larplife_v3.0.pdf"
+    target_path = r"C:\Users\Artix\Documents\Laporan_Hasil_Kerja_Larplife_v0.2.0.pdf"
     create_report(target_path)
