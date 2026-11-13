@@ -81,14 +81,15 @@ pub fn normalize_executable_name(name: &str) -> String {
 
     let suffixes = ["_win64", "-win64", "_x64", "-x64", "x64", "64"];
     for suffix in suffixes {
-        if let Some(stripped) = stem.strip_suffix(suffix) {
-            if !stripped.is_empty() && !stripped.ends_with('/') {
-                return if has_exe {
-                    format!("{}.exe", stripped)
-                } else {
-                    stripped.to_string()
-                };
-            }
+        if let Some(stripped) = stem.strip_suffix(suffix)
+            && !stripped.is_empty()
+            && !stripped.ends_with('/')
+        {
+            return if has_exe {
+                format!("{}.exe", stripped)
+            } else {
+                stripped.to_string()
+            };
         }
     }
 
@@ -268,10 +269,10 @@ pub fn read_cache_file(cache_file: &Path) -> Result<Vec<DetectableApp>, String> 
 }
 
 pub fn write_cache_file(cache_file: &Path, apps: &[DetectableApp]) -> Result<(), String> {
-    if let Some(parent) = cache_file.parent() {
-        if !parent.as_os_str().is_empty() {
-            let _ = fs::create_dir_all(parent);
-        }
+    if let Some(parent) = cache_file.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        let _ = fs::create_dir_all(parent);
     }
 
     let json = serde_json::to_string(apps).map_err(|e| e.to_string())?;
@@ -294,10 +295,11 @@ pub fn fetch_detectable_apps_at_time(
     force_refresh: bool,
     now: SystemTime,
 ) -> Result<Vec<DetectableApp>, String> {
-    if !force_refresh && is_cache_fresh(cache_file, now) {
-        if let Ok(cached_apps) = read_cache_file(cache_file) {
-            return Ok(cached_apps);
-        }
+    if !force_refresh
+        && is_cache_fresh(cache_file, now)
+        && let Ok(cached_apps) = read_cache_file(cache_file)
+    {
+        return Ok(cached_apps);
     }
 
     match fetch_from_network(url) {
