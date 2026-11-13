@@ -40,10 +40,7 @@ pub struct SettingsApp {
 
 impl SettingsApp {
     pub fn new_with_path(config_path: PathBuf) -> Self {
-        let config = match Config::load_or_create(&config_path) {
-            Ok(cfg) => cfg,
-            Err(_) => Config::default_presets(),
-        };
+        let config = Config::load_or_create(&config_path).unwrap_or_default();
 
         let running_apps = get_running_applications();
         let (async_tx, async_rx) = channel();
@@ -72,6 +69,10 @@ impl SettingsApp {
     }
 
     pub fn add_app(&mut self) {
+        if self.is_busy {
+            return;
+        }
+
         let new_app = AppConfig {
             app_name: "New Application".to_string(),
             process_name: "app.exe".to_string(),
@@ -89,7 +90,7 @@ impl SettingsApp {
     }
 
     pub fn remove_selected_app(&mut self) {
-        if self.config.apps.is_empty() {
+        if self.is_busy || self.config.apps.is_empty() {
             return;
         }
 
@@ -210,29 +211,29 @@ impl SettingsApp {
     }
 
     pub fn accept_candidate(&mut self) {
-        if let Some((app_idx, candidate)) = self.pending_candidate.take() {
-            if let Some(app) = self.config.apps.get_mut(app_idx) {
-                app.discord_app_id = candidate.discord_app_id.clone();
-                self.status_message = Some((
-                    format!(
-                        "Set Discord App ID to {} ({})",
-                        app.discord_app_id, candidate.discord_app_name
-                    ),
-                    false,
-                ));
-            }
+        if let Some((app_idx, candidate)) = self.pending_candidate.take()
+            && let Some(app) = self.config.apps.get_mut(app_idx)
+        {
+            app.discord_app_id = candidate.discord_app_id.clone();
+            self.status_message = Some((
+                format!(
+                    "Set Discord App ID to {} ({})",
+                    app.discord_app_id, candidate.discord_app_name
+                ),
+                false,
+            ));
         }
     }
 
     pub fn reject_candidate(&mut self) {
-        if let Some((app_idx, _candidate)) = self.pending_candidate.take() {
-            if let Some(app) = self.config.apps.get_mut(app_idx) {
-                app.discord_app_id.clear();
-                self.status_message = Some((
-                    "Discord App ID cleared (larplife fallback mode active)".to_string(),
-                    false,
-                ));
-            }
+        if let Some((app_idx, _candidate)) = self.pending_candidate.take()
+            && let Some(app) = self.config.apps.get_mut(app_idx)
+        {
+            app.discord_app_id.clear();
+            self.status_message = Some((
+                "Discord App ID cleared (larplife fallback mode active)".to_string(),
+                false,
+            ));
         }
     }
 
@@ -257,6 +258,10 @@ impl SettingsApp {
 
 impl eframe::App for SettingsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.is_busy {
+            ctx.request_repaint();
+        }
+
         self.handle_async_events();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -337,10 +342,16 @@ impl eframe::App for SettingsApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Configured Apps");
-                    if ui.button("➕ Add").clicked() {
+                    if ui
+                        .add_enabled(!self.is_busy, egui::Button::new("➕ Add"))
+                        .clicked()
+                    {
                         self.add_app();
                     }
-                    if ui.button("🗑 Del").clicked() {
+                    if ui
+                        .add_enabled(!self.is_busy, egui::Button::new("🗑 Del"))
+                        .clicked()
+                    {
                         self.remove_selected_app();
                     }
                 });
@@ -438,24 +449,24 @@ impl eframe::App for SettingsApp {
                                 }
                             });
 
-                            if let Some((cand_app_idx, candidate)) = &self.pending_candidate {
-                                if *cand_app_idx == app_idx {
-                                    ui.add_space(4.0);
-                                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                                        ui.label(format!(
-                                            "Found candidate in Discord database: {} (ID: {}, Score: {}/100)",
-                                            candidate.discord_app_name, candidate.discord_app_id, candidate.score
-                                        ));
-                                        ui.horizontal(|ui| {
-                                            if ui.button("Use This ID").clicked() {
-                                                confirm_action = Some(true);
-                                            }
-                                            if ui.button("Not This App (Use larplife Mode)").clicked() {
-                                                confirm_action = Some(false);
-                                            }
-                                        });
+                            if let Some((cand_app_idx, candidate)) = &self.pending_candidate
+                                && *cand_app_idx == app_idx
+                            {
+                                ui.add_space(4.0);
+                                egui::Frame::group(ui.style()).show(ui, |ui| {
+                                    ui.label(format!(
+                                        "Found candidate in Discord database: {} (ID: {}, Score: {}/100)",
+                                        candidate.discord_app_name, candidate.discord_app_id, candidate.score
+                                    ));
+                                    ui.horizontal(|ui| {
+                                        if ui.button("Use This ID").clicked() {
+                                            confirm_action = Some(true);
+                                        }
+                                        if ui.button("Not This App (Use larplife Mode)").clicked() {
+                                            confirm_action = Some(false);
+                                        }
                                     });
-                                }
+                                });
                             }
                         });
                         ui.end_row();
@@ -862,36 +873,35 @@ fn find_running_process_path(target_exe: &str) -> Option<PathBuf> {
                 .to_string_lossy()
                 .into_owned();
 
-            if current_exe.eq_ignore_ascii_case(target_exe)
-                || current_exe.eq_ignore_ascii_case(&format!("{}.exe", target_exe))
-            {
-                if let Ok(handle) = unsafe {
+            if (current_exe.eq_ignore_ascii_case(target_exe)
+                || current_exe.eq_ignore_ascii_case(&format!("{}.exe", target_exe)))
+                && let Ok(handle) = unsafe {
                     OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, entry.th32ProcessID)
-                } {
-                    let mut path_buf = vec![0u16; 1024];
-                    let mut len = path_buf.len() as u32;
-                    if unsafe {
-                        QueryFullProcessImageNameW(
-                            handle,
-                            PROCESS_NAME_WIN32,
-                            PWSTR(path_buf.as_mut_ptr()),
-                            &mut len,
-                        )
+                }
+            {
+                let mut path_buf = vec![0u16; 1024];
+                let mut len = path_buf.len() as u32;
+                if unsafe {
+                    QueryFullProcessImageNameW(
+                        handle,
+                        PROCESS_NAME_WIN32,
+                        PWSTR(path_buf.as_mut_ptr()),
+                        &mut len,
+                    )
+                }
+                .is_ok()
+                {
+                    let full_path = OsString::from_wide(&path_buf[..len as usize])
+                        .to_string_lossy()
+                        .into_owned();
+                    let p = PathBuf::from(full_path);
+                    if p.exists() {
+                        found_path = Some(p);
                     }
-                    .is_ok()
-                    {
-                        let full_path = OsString::from_wide(&path_buf[..len as usize])
-                            .to_string_lossy()
-                            .into_owned();
-                        let p = PathBuf::from(full_path);
-                        if p.exists() {
-                            found_path = Some(p);
-                        }
-                    }
-                    let _ = unsafe { CloseHandle(handle) };
-                    if found_path.is_some() {
-                        break;
-                    }
+                }
+                let _ = unsafe { CloseHandle(handle) };
+                if found_path.is_some() {
+                    break;
                 }
             }
 
@@ -1071,7 +1081,7 @@ mod tests {
         assert!(res.is_ok());
 
         let reloaded = Config::load_or_create(&path).expect("Failed to reload saved config");
-        assert_eq!(reloaded.badge_enabled, false);
+        assert!(!reloaded.badge_enabled);
         assert_eq!(reloaded.default_discord_app_id, "998877665544332211");
         assert_eq!(reloaded.badge_image_url, "https://example.com/custom_badge.png");
         assert_eq!(reloaded.badge_text, "Custom Badge Text");
@@ -1243,5 +1253,25 @@ mod tests {
         let resolved = resolve_exe_path("cmd.exe");
         assert!(resolved.is_some());
         assert!(resolved.unwrap().exists());
+    }
+
+    #[test]
+    fn app_mutation_blocked_while_busy() {
+        let path = temp_test_path("busy_mutation");
+        let mut app = SettingsApp::new_with_path(path.clone());
+        let initial_count = app.config.apps.len();
+        app.is_busy = true;
+
+        app.add_app();
+        assert_eq!(app.config.apps.len(), initial_count);
+
+        app.remove_selected_app();
+        assert_eq!(app.config.apps.len(), initial_count);
+
+        app.is_busy = false;
+        app.add_app();
+        assert_eq!(app.config.apps.len(), initial_count + 1);
+
+        let _ = fs::remove_file(&path);
     }
 }
