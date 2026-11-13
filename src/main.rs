@@ -108,6 +108,8 @@ impl PresenceTracker {
             logo_key: app.logo_key.clone(),
             logo_text: app.logo_text.clone(),
             start_timestamp,
+            small_image: None,
+            small_text: None,
         }
     }
 
@@ -216,6 +218,8 @@ impl PresenceTracker {
                     logo_key: app.logo_key.clone(),
                     logo_text: app.logo_text.clone(),
                     start_timestamp: active.start_timestamp,
+                    small_image: None,
+                    small_text: None,
                 });
             }
 

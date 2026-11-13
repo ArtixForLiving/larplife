@@ -10,6 +10,31 @@ pub struct PresencePayload {
     pub logo_key: String,
     pub logo_text: String,
     pub start_timestamp: i64,
+    pub small_image: Option<String>,
+    pub small_text: Option<String>,
+}
+
+#[allow(dead_code)]
+pub fn format_fallback_details(app_name: &str, sanitized_details: &str) -> String {
+    let trimmed_app = app_name.trim();
+    let trimmed_details = sanitized_details.trim();
+
+    if trimmed_details.is_empty() {
+        return trimmed_app.to_string();
+    }
+
+    if trimmed_app.is_empty() {
+        return trimmed_details.to_string();
+    }
+
+    if trimmed_details
+        .to_lowercase()
+        .contains(&trimmed_app.to_lowercase())
+    {
+        return trimmed_details.to_string();
+    }
+
+    format!("{} — {}", trimmed_app, trimmed_details)
 }
 
 pub fn format_discord_text(text: &str) -> String {
@@ -121,11 +146,33 @@ pub fn build_activity(payload: &PresencePayload) -> activity::Activity<'static> 
 
     let key_trimmed = payload.logo_key.trim();
     let text_trimmed = payload.logo_text.trim();
+    let small_image_trimmed = payload
+        .small_image
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let small_text_trimmed = payload
+        .small_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
-    if !key_trimmed.is_empty() {
-        let mut assets = activity::Assets::new().large_image(key_trimmed.to_string());
-        if !text_trimmed.is_empty() {
-            assets = assets.large_text(text_trimmed.to_string());
+    let has_large = !key_trimmed.is_empty();
+    let has_small = small_image_trimmed.is_some();
+
+    if has_large || has_small {
+        let mut assets = activity::Assets::new();
+        if has_large {
+            assets = assets.large_image(key_trimmed.to_string());
+            if !text_trimmed.is_empty() {
+                assets = assets.large_text(text_trimmed.to_string());
+            }
+        }
+        if let Some(small_key) = small_image_trimmed {
+            assets = assets.small_image(small_key.to_string());
+            if let Some(small_txt) = small_text_trimmed {
+                assets = assets.small_text(small_txt.to_string());
+            }
         }
         activity = activity.assets(assets);
     }
@@ -161,7 +208,9 @@ impl DiscordClient {
             return Ok(false);
         }
 
-        if self.current_app_id.as_deref() != Some(&payload.discord_app_id) {
+        let app_id = payload.discord_app_id.trim();
+
+        if self.current_app_id.as_deref() != Some(app_id) {
             self.disconnect();
         }
 
@@ -173,11 +222,11 @@ impl DiscordClient {
             }
 
             self.last_connect_attempt = Some(now);
-            let mut client = DiscordIpcClient::new(&payload.discord_app_id);
+            let mut client = DiscordIpcClient::new(app_id);
             match client.connect() {
                 Ok(()) => {
                     self.ipc = Some(client);
-                    self.current_app_id = Some(payload.discord_app_id.clone());
+                    self.current_app_id = Some(app_id.to_string());
                     self.last_connect_attempt = None;
                 }
                 Err(err) => {
@@ -327,6 +376,8 @@ mod tests {
             logo_key: "".to_string(),
             logo_text: "".to_string(),
             start_timestamp: 1_700_000_000,
+            small_image: None,
+            small_text: None,
         };
 
         let json = serde_json::to_value(build_activity(&empty_assets_payload))
@@ -343,5 +394,125 @@ mod tests {
             serde_json::to_value(build_activity(&with_key_only)).expect("activity must serialize");
         assert_eq!(json2["assets"]["large_image"], "blender_logo");
         assert!(json2["assets"].get("large_text").is_none());
+    }
+
+    #[test]
+    fn build_activity_attaches_small_image_and_text_when_present() {
+        let payload = PresencePayload {
+            discord_app_id: "1182390998877665544".to_string(),
+            details: "Working".to_string(),
+            state: "Active".to_string(),
+            logo_key: "blender_logo".to_string(),
+            logo_text: "Blender 3D".to_string(),
+            start_timestamp: 1_700_000_000,
+            small_image: Some("https://larplife.app/badge.png".to_string()),
+            small_text: Some("LarpLife Active".to_string()),
+        };
+
+        let json = serde_json::to_value(build_activity(&payload))
+            .expect("activity must serialize");
+        assert_eq!(json["assets"]["large_image"], "blender_logo");
+        assert_eq!(json["assets"]["large_text"], "Blender 3D");
+        assert_eq!(json["assets"]["small_image"], "https://larplife.app/badge.png");
+        assert_eq!(json["assets"]["small_text"], "LarpLife Active");
+    }
+
+    #[test]
+    fn build_activity_attaches_small_image_without_large_image() {
+        let payload = PresencePayload {
+            discord_app_id: "1182390998877665544".to_string(),
+            details: "Coding".to_string(),
+            state: "Active".to_string(),
+            logo_key: "".to_string(),
+            logo_text: "".to_string(),
+            start_timestamp: 1_700_000_000,
+            small_image: Some("larplife_badge".to_string()),
+            small_text: Some("LarpLife".to_string()),
+        };
+
+        let json = serde_json::to_value(build_activity(&payload))
+            .expect("activity must serialize");
+        assert!(json["assets"].get("large_image").is_none());
+        assert_eq!(json["assets"]["small_image"], "larplife_badge");
+        assert_eq!(json["assets"]["small_text"], "LarpLife");
+    }
+
+    #[test]
+    fn build_activity_omits_small_image_and_text_when_none() {
+        let payload = PresencePayload {
+            discord_app_id: "1182390998877665544".to_string(),
+            details: "Coding".to_string(),
+            state: "Active".to_string(),
+            logo_key: "blender_logo".to_string(),
+            logo_text: "".to_string(),
+            start_timestamp: 1_700_000_000,
+            small_image: None,
+            small_text: None,
+        };
+
+        let json = serde_json::to_value(build_activity(&payload))
+            .expect("activity must serialize");
+        assert_eq!(json["assets"]["large_image"], "blender_logo");
+        assert!(json["assets"].get("small_image").is_none());
+        assert!(json["assets"].get("small_text").is_none());
+    }
+
+    #[test]
+    fn format_fallback_details_formats_app_and_details_cleanly() {
+        assert_eq!(
+            format_fallback_details("Cursor", "project.rs"),
+            "Cursor — project.rs"
+        );
+        assert_eq!(
+            format_fallback_details("Notepad", "notes.txt"),
+            "Notepad — notes.txt"
+        );
+    }
+
+    #[test]
+    fn format_fallback_details_returns_app_name_when_details_empty() {
+        assert_eq!(format_fallback_details("Cursor", ""), "Cursor");
+        assert_eq!(format_fallback_details("Cursor", "   "), "Cursor");
+        assert_eq!(format_fallback_details("  Cursor  ", ""), "Cursor");
+        assert_eq!(format_fallback_details("", "project.rs"), "project.rs");
+        assert_eq!(format_fallback_details("", ""), "");
+    }
+
+    #[test]
+    fn format_fallback_details_avoids_duplicate_prefix_if_details_already_contain_app_name() {
+        assert_eq!(
+            format_fallback_details("Cursor", "Cursor — project.rs"),
+            "Cursor — project.rs"
+        );
+        assert_eq!(
+            format_fallback_details("Blender", "blender scene.blend"),
+            "blender scene.blend"
+        );
+        assert_eq!(
+            format_fallback_details("Photoshop", "Photoshop"),
+            "Photoshop"
+        );
+        assert_eq!(
+            format_fallback_details("VSCode", "Editing in VSCode workspace"),
+            "Editing in VSCode workspace"
+        );
+    }
+
+    #[test]
+    fn build_activity_ignores_whitespace_only_badge_assets() {
+        let payload = PresencePayload {
+            discord_app_id: "1182390998877665544".to_string(),
+            details: "Coding".to_string(),
+            state: "Active".to_string(),
+            logo_key: "".to_string(),
+            logo_text: "".to_string(),
+            start_timestamp: 1_700_000_000,
+            small_image: Some("   ".to_string()),
+            small_text: Some("   ".to_string()),
+        };
+
+        let json = serde_json::to_value(build_activity(&payload))
+            .expect("activity must serialize");
+        assert!(json.get("assets").is_none());
     }
 }
