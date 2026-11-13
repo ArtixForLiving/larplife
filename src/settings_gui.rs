@@ -749,11 +749,17 @@ impl eframe::App for SettingsApp {
 
 pub fn run_settings_gui() -> Result<(), eframe::Error> {
     let window_title = format!("larplife v{} - Settings", env!("CARGO_PKG_VERSION"));
+    let icon_data = egui::IconData {
+        rgba: crate::app_icon::APP_ICON_RGBA.to_vec(),
+        width: crate::app_icon::APP_ICON_WIDTH,
+        height: crate::app_icon::APP_ICON_HEIGHT,
+    };
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([760.0, 560.0])
             .with_min_inner_size([640.0, 460.0])
-            .with_title(&window_title),
+            .with_title(&window_title)
+            .with_icon(std::sync::Arc::new(icon_data)),
         ..Default::default()
     };
 

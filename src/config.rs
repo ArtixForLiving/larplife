@@ -4,8 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_LARPLIFE_APP_ID: &str = "1350000000000000000";
-pub const DEFAULT_BADGE_IMAGE_URL: &str =
-    "https://raw.githubusercontent.com/larplife-project/larplife/main/assets/larplife_badge.png";
+pub const DEFAULT_BADGE_IMAGE_URL: &str = "https://files.catbox.moe/9dxq29.png";
 pub const DEFAULT_BADGE_TEXT: &str = concat!("larplife v", env!("CARGO_PKG_VERSION"));
 
 fn default_discord_app_id() -> String {
