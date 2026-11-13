@@ -336,7 +336,7 @@ mod tests {
             "-v".to_string()
         ]));
         assert!(!is_version_mode(&["larplife.exe".to_string()]));
-        assert_eq!(APP_VERSION, "0.2.0");
+        assert_eq!(APP_VERSION, "0.3.0");
     }
 
     #[test]

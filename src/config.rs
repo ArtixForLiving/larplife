@@ -3,11 +3,46 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub const DEFAULT_LARPLIFE_APP_ID: &str = "1350000000000000000";
+pub const DEFAULT_BADGE_IMAGE_URL: &str =
+    "https://raw.githubusercontent.com/larplife-project/larplife/main/assets/larplife_badge.png";
+pub const DEFAULT_BADGE_TEXT: &str = concat!("larplife v", env!("CARGO_PKG_VERSION"));
+
+fn default_discord_app_id() -> String {
+    DEFAULT_LARPLIFE_APP_ID.to_string()
+}
+
+fn default_badge_enabled() -> bool {
+    true
+}
+
+fn default_badge_image_url() -> String {
+    DEFAULT_BADGE_IMAGE_URL.to_string()
+}
+
+fn default_badge_text() -> String {
+    DEFAULT_BADGE_TEXT.to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub check_interval_seconds: u64,
     pub clear_timeout_seconds: u64,
+    #[serde(default = "default_discord_app_id")]
+    pub default_discord_app_id: String,
+    #[serde(default = "default_badge_enabled")]
+    pub badge_enabled: bool,
+    #[serde(default = "default_badge_image_url")]
+    pub badge_image_url: String,
+    #[serde(default = "default_badge_text")]
+    pub badge_text: String,
     pub apps: Vec<AppConfig>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::default_presets()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +101,10 @@ impl Config {
         Self {
             check_interval_seconds: 2,
             clear_timeout_seconds: 30,
+            default_discord_app_id: DEFAULT_LARPLIFE_APP_ID.to_string(),
+            badge_enabled: true,
+            badge_image_url: DEFAULT_BADGE_IMAGE_URL.to_string(),
+            badge_text: DEFAULT_BADGE_TEXT.to_string(),
             apps: vec![
                 AppConfig {
                     app_name: "Adobe Photoshop".to_string(),
@@ -223,6 +262,28 @@ impl Config {
             });
         }
 
+        let default_app_id = self.default_discord_app_id.trim();
+        if !default_app_id.is_empty() && !default_app_id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(ConfigError::Validation {
+                message: format!(
+                    "Invalid default_discord_app_id '{}': must contain numeric digits only",
+                    self.default_discord_app_id
+                ),
+            });
+        }
+
+        if self.badge_enabled {
+            let url = &self.badge_image_url;
+            if !url.starts_with("https://") || url.contains(' ') || url.len() > 256 {
+                return Err(ConfigError::Validation {
+                    message: format!(
+                        "Invalid badge_image_url '{}': must start with 'https://', contain no spaces, and be at most 256 characters",
+                        url
+                    ),
+                });
+            }
+        }
+
         for (index, app) in self.apps.iter().enumerate() {
             if app.process_name.trim().is_empty() {
                 return Err(ConfigError::Validation {
@@ -231,17 +292,38 @@ impl Config {
             }
 
             let app_id = app.discord_app_id.trim();
-            if app_id.is_empty() {
-                return Err(ConfigError::Validation {
-                    message: format!("App '{}' has an empty discord_app_id", app.app_name),
-                });
-            }
-
-            if !app_id.chars().all(|c| c.is_ascii_digit()) {
+            if !app_id.is_empty() && !app_id.chars().all(|c| c.is_ascii_digit()) {
                 return Err(ConfigError::Validation {
                     message: format!(
                         "App '{}' has invalid discord_app_id '{}': must contain numeric digits only",
                         app.app_name, app.discord_app_id
+                    ),
+                });
+            }
+
+            let logo = &app.logo_key;
+            if logo.len() > 256 {
+                return Err(ConfigError::Validation {
+                    message: format!(
+                        "App '{}' has invalid logo_key: length {} exceeds maximum of 256 characters",
+                        app.app_name,
+                        logo.len()
+                    ),
+                });
+            }
+            if logo.contains(' ') {
+                return Err(ConfigError::Validation {
+                    message: format!(
+                        "App '{}' has invalid logo_key '{}': must not contain spaces",
+                        app.app_name, logo
+                    ),
+                });
+            }
+            if logo.starts_with("http://") {
+                return Err(ConfigError::Validation {
+                    message: format!(
+                        "App '{}' has invalid logo_key '{}': insecure HTTP is not allowed, must use HTTPS or an asset key",
+                        app.app_name, logo
                     ),
                 });
             }
@@ -315,14 +397,98 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_discord_app_id_or_process_name() {
+    fn rejects_empty_process_name() {
+        let mut cfg = Config::default_presets();
+        cfg.apps[0].process_name = "   ".to_string();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation { .. })));
+    }
+
+    #[test]
+    fn backward_compatibility_deserializes_missing_v0_3_0_fields_with_defaults() {
+        let legacy_json = r#"{
+            "check_interval_seconds": 2,
+            "clear_timeout_seconds": 30,
+            "apps": []
+        }"#;
+
+        let cfg: Config = serde_json::from_str(legacy_json).expect("should parse legacy config");
+        assert_eq!(cfg.default_discord_app_id, DEFAULT_LARPLIFE_APP_ID);
+        assert!(cfg.badge_enabled);
+        assert_eq!(cfg.badge_image_url, DEFAULT_BADGE_IMAGE_URL);
+        assert_eq!(cfg.badge_text, DEFAULT_BADGE_TEXT);
+    }
+
+    #[test]
+    fn validation_allows_empty_discord_app_id() {
         let mut cfg = Config::default_presets();
         cfg.apps[0].discord_app_id = "".to_string();
+        assert!(cfg.validate().is_ok());
+
+        cfg.apps[0].discord_app_id = "   ".to_string();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_non_digit_non_empty_discord_app_id() {
+        let mut cfg = Config::default_presets();
+        cfg.apps[0].discord_app_id = "1234abc".to_string();
         assert!(matches!(cfg.validate(), Err(ConfigError::Validation { .. })));
 
         let mut cfg2 = Config::default_presets();
-        cfg2.apps[0].process_name = "   ".to_string();
+        cfg2.default_discord_app_id = "non_numeric_id".to_string();
         assert!(matches!(cfg2.validate(), Err(ConfigError::Validation { .. })));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_logo_key() {
+        let mut cfg = Config::default_presets();
+        cfg.apps[0].logo_key = "http://insecure.com/logo.png".to_string();
+        let err = cfg.validate().expect_err("http:// URL must be rejected");
+        assert!(matches!(err, ConfigError::Validation { .. }));
+
+        cfg.apps[0].logo_key = "logo key with spaces".to_string();
+        let err = cfg.validate().expect_err("logo_key with spaces must be rejected");
+        assert!(matches!(err, ConfigError::Validation { .. }));
+
+        cfg.apps[0].logo_key = "a".repeat(257);
+        let err = cfg.validate().expect_err("logo_key > 256 chars must be rejected");
+        assert!(matches!(err, ConfigError::Validation { .. }));
+
+        // Valid logo keys
+        cfg.apps[0].logo_key = "https://example.com/logo.png".to_string();
+        assert!(cfg.validate().is_ok());
+
+        cfg.apps[0].logo_key = "valid_asset_key_123".to_string();
+        assert!(cfg.validate().is_ok());
+
+        cfg.apps[0].logo_key = "".to_string();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_invalid_badge_image_url_when_badge_enabled() {
+        let mut cfg = Config::default_presets();
+        cfg.badge_enabled = true;
+
+        cfg.badge_image_url = "http://insecure.com/badge.png".to_string();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation { .. })));
+
+        cfg.badge_image_url = "https://example.com/badge with spaces.png".to_string();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation { .. })));
+
+        cfg.badge_image_url = format!("https://example.com/{}", "a".repeat(250));
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation { .. })));
+
+        cfg.badge_image_url = "".to_string();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation { .. })));
+
+        // When badge_enabled is false, invalid url does not fail validation
+        cfg.badge_enabled = false;
+        cfg.badge_image_url = "".to_string();
+        assert!(cfg.validate().is_ok());
+
+        cfg.badge_image_url = "http://insecure.com/badge.png".to_string();
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
