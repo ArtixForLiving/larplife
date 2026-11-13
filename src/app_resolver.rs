@@ -282,12 +282,12 @@ pub fn write_cache_file(cache_file: &Path, apps: &[DetectableApp]) -> Result<(),
 pub fn fetch_from_network(url: &str) -> Result<Vec<DetectableApp>, String> {
     let resp = ureq::get(url)
         .set("User-Agent", "Larplife/0.3.0")
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(25))
         .call()
         .map_err(|e| e.to_string())?;
 
-    let body = resp.into_string().map_err(|e| e.to_string())?;
-    serde_json::from_str::<Vec<DetectableApp>>(&body).map_err(|e| e.to_string())
+    let reader = resp.into_reader();
+    serde_json::from_reader::<_, Vec<DetectableApp>>(reader).map_err(|e| e.to_string())
 }
 
 pub fn fetch_detectable_apps_at_time(
@@ -624,5 +624,24 @@ mod tests {
     fn cache_path_ends_with_expected_filename() {
         let p = cache_path();
         assert!(p.ends_with("detectable_cache.json"));
+    }
+
+    #[test]
+    fn parses_large_json_stream_exceeding_ten_megabytes() {
+        let sample = r#"{"id":"123","name":"BigApp","executables":[{"name":"big.exe","os":"win32"}]},"#;
+        let repeat_count = (11 * 1024 * 1024) / sample.len() + 1;
+        let mut large_json = String::with_capacity(repeat_count * sample.len() + 2);
+        large_json.push('[');
+        for _ in 0..repeat_count {
+            large_json.push_str(sample);
+        }
+        large_json.pop();
+        large_json.push(']');
+
+        assert!(large_json.len() > 10 * 1024 * 1024);
+
+        let cursor = std::io::Cursor::new(large_json.into_bytes());
+        let apps: Vec<DetectableApp> = serde_json::from_reader(cursor).expect("must parse payload > 10 MB without into_string limit");
+        assert_eq!(apps.len(), repeat_count);
     }
 }
