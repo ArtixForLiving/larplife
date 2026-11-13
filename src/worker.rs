@@ -63,7 +63,7 @@ pub fn run_worker(
 
     log_info("Worker loop started.");
 
-    // Cycle 0 instant startup check (detik ke-0 detection)
+    // Cycle 0 instant startup check
     perform_tick(&mut tracker, &mut discord, &config, paused);
 
     loop {

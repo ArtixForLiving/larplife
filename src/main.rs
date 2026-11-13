@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+pub mod app_resolver;
 mod config;
 mod discord_client;
 mod logger;
