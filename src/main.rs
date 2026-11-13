@@ -11,7 +11,7 @@ mod window_reader;
 mod worker;
 
 use config::{AppConfig, Config};
-use discord_client::{sanitize_title, PresencePayload};
+use discord_client::{format_fallback_details, sanitize_title, PresencePayload};
 use logger::{log_error, log_info, show_error_dialog};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -95,21 +95,43 @@ impl PresenceTracker {
         Self::default()
     }
 
-    fn build_payload(
+    pub fn build_payload(
+        config: &Config,
         app: &AppConfig,
         window_title: &str,
         start_timestamp: i64,
     ) -> PresencePayload {
-        let details = sanitize_title(window_title, app);
+        let app_id = if app.discord_app_id.trim().is_empty() {
+            config.default_discord_app_id.trim().to_string()
+        } else {
+            app.discord_app_id.trim().to_string()
+        };
+
+        let sanitized = sanitize_title(window_title, app);
+        let details = if app.discord_app_id.trim().is_empty() {
+            format_fallback_details(&app.app_name, &sanitized)
+        } else {
+            sanitized
+        };
+
+        let (small_image, small_text) = if config.badge_enabled && !config.badge_image_url.trim().is_empty() {
+            (
+                Some(config.badge_image_url.trim().to_string()),
+                Some(config.badge_text.trim().to_string()),
+            )
+        } else {
+            (None, None)
+        };
+
         PresencePayload {
-            discord_app_id: app.discord_app_id.clone(),
+            discord_app_id: app_id,
             details,
             state: app.state_text.clone(),
             logo_key: app.logo_key.clone(),
             logo_text: app.logo_text.clone(),
             start_timestamp,
-            small_image: None,
-            small_text: None,
+            small_image,
+            small_text,
         }
     }
 
@@ -149,17 +171,19 @@ impl PresenceTracker {
                 let active = self.active.as_mut().expect("active must exist");
                 active.grace_started_at = None;
 
-                let details = sanitize_title(&win.window_title, app);
-                active.last_details = details;
-
-                return TrackerAction::Set(Self::build_payload(
+                let payload = Self::build_payload(
+                    config,
                     app,
                     &win.window_title,
                     active.start_timestamp,
-                ));
+                );
+                active.last_details = payload.details.clone();
+
+                return TrackerAction::Set(payload);
             }
 
-            // Switch debounce: candidate requires at least 2 consecutive cycles
+            // Zero-debounce on empty state (candidate_hits >= 1),
+            // or 2 consecutive hits required when switching from another active app.
             let candidate_hits = match &mut self.pending {
                 Some(candidate)
                     if candidate
@@ -178,23 +202,26 @@ impl PresenceTracker {
                 }
             };
 
-            if candidate_hits >= 2 {
+            let required_hits = if self.active.is_none() { 1 } else { 2 };
+
+            if candidate_hits >= required_hits {
                 self.pending = None;
                 let start_ts = unix_secs;
-                let details = sanitize_title(&win.window_title, app);
+                let payload = Self::build_payload(
+                    config,
+                    app,
+                    &win.window_title,
+                    start_ts,
+                );
 
                 self.active = Some(ActiveSession {
                     process_name: app.process_name.clone(),
                     start_timestamp: start_ts,
-                    last_details: details,
+                    last_details: payload.details.clone(),
                     grace_started_at: None,
                 });
 
-                return TrackerAction::Set(Self::build_payload(
-                    app,
-                    &win.window_title,
-                    start_ts,
-                ));
+                return TrackerAction::Set(payload);
             }
 
             return TrackerAction::None;
@@ -211,16 +238,9 @@ impl PresenceTracker {
                 && is_bg_running(&active.process_name)
             {
                 active.grace_started_at = None;
-                return TrackerAction::Set(PresencePayload {
-                    discord_app_id: app.discord_app_id.clone(),
-                    details: active.last_details.clone(),
-                    state: app.state_text.clone(),
-                    logo_key: app.logo_key.clone(),
-                    logo_text: app.logo_text.clone(),
-                    start_timestamp: active.start_timestamp,
-                    small_image: None,
-                    small_text: None,
-                });
+                let mut payload = Self::build_payload(config, app, "", active.start_timestamp);
+                payload.details = active.last_details.clone();
+                return TrackerAction::Set(payload);
             }
 
             match active.grace_started_at {
@@ -376,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn debounce_requires_two_consecutive_checks_before_activating() {
+    fn zero_debounce_activates_immediately_on_first_cycle_from_empty_state() {
         let cfg = Config::default_presets();
         let mut tracker = PresenceTracker::new();
         let t0 = Instant::now();
@@ -386,24 +406,180 @@ mod tests {
             window_title: "poster.psd - Adobe Photoshop".to_string(),
         });
 
-        assert_eq!(
-            tracker.step(&cfg, ps.clone(), t0, 1_700_000_000, |_| false),
-            TrackerAction::None
-        );
-
-        let action = tracker.step(
-            &cfg,
-            ps,
-            t0 + Duration::from_secs(2),
-            1_700_000_002,
-            |_| false,
-        );
+        let action = tracker.step(&cfg, ps, t0, 1_700_000_000, |_| false);
         match action {
             TrackerAction::Set(payload) => {
                 assert_eq!(payload.details, "poster.psd");
-                assert_eq!(payload.start_timestamp, 1_700_000_002);
+                assert_eq!(payload.start_timestamp, 1_700_000_000);
+                assert!(tracker.active.is_some());
             }
-            other => panic!("expected Set on 2nd check, got {:?}", other),
+            other => panic!("expected immediate Set on cycle 1, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn switch_debounce_requires_two_consecutive_checks_between_active_apps() {
+        let cfg = Config::default_presets();
+        let mut tracker = PresenceTracker::new();
+        let t0 = Instant::now();
+
+        let ps = ForegroundReading::Window(ActiveWindow {
+            process_name: "Photoshop.exe".to_string(),
+            window_title: "poster.psd - Adobe Photoshop".to_string(),
+        });
+        let blender = ForegroundReading::Window(ActiveWindow {
+            process_name: "blender.exe".to_string(),
+            window_title: "Blender - scene.blend".to_string(),
+        });
+
+        // App A activates immediately on cycle 1
+        let act1 = tracker.step(&cfg, ps, t0, 1000, |_| false);
+        assert!(matches!(act1, TrackerAction::Set(_)));
+
+        // App B candidate hit 1 -> TrackerAction::None, active remains App A
+        let act2 = tracker.step(&cfg, blender.clone(), t0 + Duration::from_secs(2), 1002, |_| false);
+        assert_eq!(act2, TrackerAction::None);
+        assert_eq!(
+            tracker.active.as_ref().map(|a| a.process_name.as_str()),
+            Some("Photoshop.exe")
+        );
+
+        // App B candidate hit 2 -> TrackerAction::Set, switches to App B
+        let act3 = tracker.step(&cfg, blender, t0 + Duration::from_secs(4), 1004, |_| false);
+        match act3 {
+            TrackerAction::Set(payload) => {
+                assert_eq!(payload.start_timestamp, 1004);
+                assert_eq!(
+                    tracker.active.as_ref().map(|a| a.process_name.as_str()),
+                    Some("blender.exe")
+                );
+            }
+            other => panic!("expected Set on 2nd cycle of App B, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn alt_tab_quick_switch_back_cancels_pending_candidate_without_flapping() {
+        let cfg = Config::default_presets();
+        let mut tracker = PresenceTracker::new();
+        let t0 = Instant::now();
+
+        let ps = ForegroundReading::Window(ActiveWindow {
+            process_name: "Photoshop.exe".to_string(),
+            window_title: "poster.psd - Adobe Photoshop".to_string(),
+        });
+        let blender = ForegroundReading::Window(ActiveWindow {
+            process_name: "blender.exe".to_string(),
+            window_title: "Blender - scene.blend".to_string(),
+        });
+
+        // App A activates at t0
+        tracker.step(&cfg, ps.clone(), t0, 1000, |_| false);
+
+        // Quick switch to App B for only 1 cycle
+        let b1 = tracker.step(&cfg, blender.clone(), t0 + Duration::from_secs(2), 1002, |_| false);
+        assert_eq!(b1, TrackerAction::None);
+        assert!(tracker.pending.is_some());
+
+        // Switch back to App A -> resumes without resetting timer, clears candidate
+        let a_resumed = tracker.step(&cfg, ps, t0 + Duration::from_secs(4), 1004, |_| false);
+        match a_resumed {
+            TrackerAction::Set(payload) => {
+                assert_eq!(payload.start_timestamp, 1000);
+                assert!(tracker.pending.is_none());
+            }
+            other => panic!("expected Set resuming App A, got {:?}", other),
+        }
+
+        // Switching to App B again starts hit 1 fresh, not hit 2
+        let b2 = tracker.step(&cfg, blender, t0 + Duration::from_secs(6), 1006, |_| false);
+        assert_eq!(b2, TrackerAction::None);
+    }
+
+    #[test]
+    fn fallback_app_id_uses_default_discord_app_id_and_formats_fallback_details() {
+        let mut cfg = Config::default_presets();
+        cfg.default_discord_app_id = "1350000000000000000".to_string();
+        cfg.apps.push(AppConfig {
+            app_name: "Obsidian".to_string(),
+            process_name: "Obsidian.exe".to_string(),
+            discord_app_id: "".to_string(),
+            logo_key: "".to_string(),
+            logo_text: "".to_string(),
+            default_details: "Taking notes".to_string(),
+            state_text: "Writing".to_string(),
+            hide_window_title: false,
+            keep_active_in_background: false,
+            strip_title_words: vec![],
+        });
+
+        let mut tracker = PresenceTracker::new();
+        let obs = ForegroundReading::Window(ActiveWindow {
+            process_name: "Obsidian.exe".to_string(),
+            window_title: "Daily Note 2026-11-13".to_string(),
+        });
+
+        let action = tracker.step(&cfg, obs, Instant::now(), 1000, |_| false);
+        match action {
+            TrackerAction::Set(payload) => {
+                assert_eq!(payload.discord_app_id, "1350000000000000000");
+                assert_eq!(
+                    payload.details,
+                    "Obsidian — Daily Note 2026-11-13"
+                );
+            }
+            other => panic!("expected Set on cycle 1, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn badge_fields_attached_when_badge_enabled_and_omitted_when_disabled() {
+        let mut cfg = Config::default_presets();
+        cfg.badge_enabled = true;
+        cfg.badge_image_url = "https://example.com/badge.png".to_string();
+        cfg.badge_text = "larplife v0.3.0".to_string();
+
+        let mut tracker = PresenceTracker::new();
+        let ps = ForegroundReading::Window(ActiveWindow {
+            process_name: "Photoshop.exe".to_string(),
+            window_title: "poster.psd - Adobe Photoshop".to_string(),
+        });
+
+        let action_enabled = tracker.step(&cfg, ps.clone(), Instant::now(), 1000, |_| false);
+        match action_enabled {
+            TrackerAction::Set(payload) => {
+                assert_eq!(
+                    payload.small_image.as_deref(),
+                    Some("https://example.com/badge.png")
+                );
+                assert_eq!(payload.small_text.as_deref(), Some("larplife v0.3.0"));
+            }
+            other => panic!("expected Set, got {:?}", other),
+        }
+
+        // Test disabled badge
+        cfg.badge_enabled = false;
+        let mut tracker2 = PresenceTracker::new();
+        let action_disabled = tracker2.step(&cfg, ps.clone(), Instant::now(), 2000, |_| false);
+        match action_disabled {
+            TrackerAction::Set(payload) => {
+                assert_eq!(payload.small_image, None);
+                assert_eq!(payload.small_text, None);
+            }
+            other => panic!("expected Set, got {:?}", other),
+        }
+
+        // Test empty/whitespace URL
+        cfg.badge_enabled = true;
+        cfg.badge_image_url = "   ".to_string();
+        let mut tracker3 = PresenceTracker::new();
+        let action_empty_url = tracker3.step(&cfg, ps, Instant::now(), 3000, |_| false);
+        match action_empty_url {
+            TrackerAction::Set(payload) => {
+                assert_eq!(payload.small_image, None);
+                assert_eq!(payload.small_text, None);
+            }
+            other => panic!("expected Set, got {:?}", other),
         }
     }
 
@@ -424,13 +600,13 @@ mod tests {
 
         tracker.step(&cfg, ps_a.clone(), t0, 1000, |_| false);
         let first = tracker.step(&cfg, ps_a, t0 + Duration::from_secs(2), 1002, |_| false);
-        assert!(matches!(first, TrackerAction::Set(ref p) if p.start_timestamp == 1002));
+        assert!(matches!(first, TrackerAction::Set(ref p) if p.start_timestamp == 1000));
 
         let second = tracker.step(&cfg, ps_b, t0 + Duration::from_secs(4), 1004, |_| false);
         match second {
             TrackerAction::Set(payload) => {
                 assert_eq!(payload.details, "file_b.psd");
-                assert_eq!(payload.start_timestamp, 1002);
+                assert_eq!(payload.start_timestamp, 1000);
             }
             other => panic!("expected updated Set with same timestamp, got {:?}", other),
         }
@@ -478,7 +654,7 @@ mod tests {
 
         // Return before timeout: timer preserved, grace cancelled
         let resumed = tracker.step(&cfg, ps, t0 + Duration::from_secs(25), 1025, |_| false);
-        assert!(matches!(resumed, TrackerAction::Set(ref p) if p.start_timestamp == 1002));
+        assert!(matches!(resumed, TrackerAction::Set(ref p) if p.start_timestamp == 1000));
 
         // Now leave and let grace period expire (>= 30s)
         assert_eq!(
@@ -530,7 +706,7 @@ mod tests {
             1122,
             |exe| exe.eq_ignore_ascii_case("blender.exe"),
         );
-        assert!(matches!(bg_action, TrackerAction::Set(ref p) if p.start_timestamp == 1002));
+        assert!(matches!(bg_action, TrackerAction::Set(ref p) if p.start_timestamp == 1000));
 
         // Once blender.exe exits, grace period starts and clears after 30s
         assert_eq!(

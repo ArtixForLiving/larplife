@@ -27,6 +27,30 @@ pub enum WorkerEvent {
     },
 }
 
+pub fn perform_tick(
+    tracker: &mut PresenceTracker,
+    discord: &mut DiscordClient,
+    config: &Config,
+    paused: bool,
+) {
+    if !paused {
+        let reading = read_foreground_window();
+        let now = Instant::now();
+        let unix_secs = current_unix_seconds();
+
+        let action = tracker.step(config, reading, now, unix_secs, is_process_running);
+        match action {
+            TrackerAction::Set(payload) => {
+                let _ = discord.update_presence(&payload, now);
+            }
+            TrackerAction::Clear => {
+                let _ = discord.clear_presence();
+            }
+            TrackerAction::None => {}
+        }
+    }
+}
+
 pub fn run_worker(
     config_path: PathBuf,
     cmd_rx: Receiver<WorkerCommand>,
@@ -38,6 +62,9 @@ pub fn run_worker(
     let mut paused = false;
 
     log_info("Worker loop started.");
+
+    // Cycle 0 instant startup check (detik ke-0 detection)
+    perform_tick(&mut tracker, &mut discord, &config, paused);
 
     loop {
         let poll_interval = if paused {
@@ -94,22 +121,7 @@ pub fn run_worker(
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if !paused {
-                    let reading = read_foreground_window();
-                    let now = Instant::now();
-                    let unix_secs = current_unix_seconds();
-
-                    let action = tracker.step(&config, reading, now, unix_secs, is_process_running);
-                    match action {
-                        TrackerAction::Set(payload) => {
-                            let _ = discord.update_presence(&payload, now);
-                        }
-                        TrackerAction::Clear => {
-                            let _ = discord.clear_presence();
-                        }
-                        TrackerAction::None => {}
-                    }
-                }
+                perform_tick(&mut tracker, &mut discord, &config, paused);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 log_info("Command channel disconnected. Exiting worker.");
@@ -189,5 +201,16 @@ mod tests {
         cmd_tx.send(WorkerCommand::Shutdown).expect("send shutdown");
         handle.join().expect("clean exit");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn perform_tick_does_nothing_when_paused() {
+        let mut tracker = PresenceTracker::new();
+        let mut discord = DiscordClient::new();
+        let config = Config::default_presets();
+
+        perform_tick(&mut tracker, &mut discord, &config, true);
+        assert!(tracker.active.is_none());
+        assert!(tracker.pending.is_none());
     }
 }
