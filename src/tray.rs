@@ -208,9 +208,12 @@ unsafe fn handle_menu_command(hwnd: HWND, command_id: usize) {
     match command_id {
         ID_OPEN_SETTINGS => {
             if let Ok(current_exe) = std::env::current_exe() {
-                let _ = std::process::Command::new(current_exe)
-                    .arg("--settings")
-                    .spawn();
+                let mut cmd = std::process::Command::new(&current_exe);
+                cmd.arg("--settings");
+                if let Some(parent) = current_exe.parent() {
+                    cmd.current_dir(parent);
+                }
+                let _ = cmd.spawn();
             }
         }
         ID_STATUS_TOGGLE => {

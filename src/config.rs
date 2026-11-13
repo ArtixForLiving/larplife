@@ -125,10 +125,6 @@ impl Config {
     }
 
     pub fn default_path() -> PathBuf {
-        let local = PathBuf::from("config.json");
-        if local.exists() {
-            return local;
-        }
         if let Ok(exe) = std::env::current_exe()
             && let Some(parent) = exe.parent()
         {
@@ -137,6 +133,18 @@ impl Config {
                 return exe_dir_config;
             }
         }
+
+        let local = PathBuf::from("config.json");
+        if local.exists() {
+            return local;
+        }
+
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(parent) = exe.parent()
+        {
+            return parent.join("config.json");
+        }
+
         local
     }
 
@@ -347,5 +355,11 @@ mod tests {
         assert_eq!(loaded.apps[0].app_name, "Custom App");
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn default_path_returns_valid_path() {
+        let path = Config::default_path();
+        assert_eq!(path.file_name().unwrap(), "config.json");
     }
 }

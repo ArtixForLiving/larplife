@@ -3,7 +3,7 @@ use crate::discord_client::DiscordClient;
 use crate::logger::{log_error, log_info};
 use crate::window_reader::{is_process_running, read_foreground_window};
 use crate::{current_unix_seconds, PresenceTracker, TrackerAction};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -28,11 +28,11 @@ pub enum WorkerEvent {
 }
 
 pub fn run_worker(
+    config_path: PathBuf,
     cmd_rx: Receiver<WorkerCommand>,
     event_tx: Sender<WorkerEvent>,
 ) {
-    let config_path = Path::new("config.json");
-    let mut config = Config::load_or_create(config_path).unwrap_or_else(|_| Config::default_presets());
+    let mut config = Config::load_or_create(&config_path).unwrap_or_else(|_| Config::default_presets());
     let mut discord = DiscordClient::new();
     let mut tracker = PresenceTracker::new();
     let mut paused = false;
@@ -71,7 +71,7 @@ pub fn run_worker(
                 });
             }
             Ok(WorkerCommand::ReloadConfig) => {
-                match Config::load_or_create(config_path) {
+                match Config::load_or_create(&config_path) {
                     Ok(new_cfg) => {
                         let count = new_cfg.apps.len();
                         config = new_cfg;
@@ -133,7 +133,7 @@ mod tests {
         let (event_tx, _event_rx) = channel();
 
         let handle = thread::spawn(move || {
-            run_worker(cmd_rx, event_tx);
+            run_worker(Config::default_path(), cmd_rx, event_tx);
         });
 
         cmd_tx.send(WorkerCommand::Shutdown).expect("send shutdown");
@@ -146,7 +146,7 @@ mod tests {
         let (event_tx, event_rx) = channel();
 
         let handle = thread::spawn(move || {
-            run_worker(cmd_rx, event_tx);
+            run_worker(Config::default_path(), cmd_rx, event_tx);
         });
 
         cmd_tx.send(WorkerCommand::TogglePause).expect("send pause");
@@ -164,5 +164,30 @@ mod tests {
 
         cmd_tx.send(WorkerCommand::Shutdown).expect("send shutdown");
         handle.join().expect("clean exit");
+    }
+
+    #[test]
+    fn worker_handles_reload_with_custom_path() {
+        let (cmd_tx, cmd_rx) = channel();
+        let (event_tx, event_rx) = channel();
+        let path = std::env::temp_dir().join("larplife_worker_reload_test.json");
+        let cfg = Config::default_presets();
+        let _ = cfg.save_to_file(&path);
+
+        let worker_path = path.clone();
+        let handle = thread::spawn(move || {
+            run_worker(worker_path, cmd_rx, event_tx);
+        });
+
+        cmd_tx.send(WorkerCommand::ReloadConfig).expect("send reload");
+        let event = event_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("should receive reload event");
+
+        assert!(matches!(event, WorkerEvent::ConfigReloaded { success: true, .. }));
+
+        cmd_tx.send(WorkerCommand::Shutdown).expect("send shutdown");
+        handle.join().expect("clean exit");
+        let _ = std::fs::remove_file(&path);
     }
 }

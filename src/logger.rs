@@ -54,12 +54,21 @@ pub fn log_message_to_file(path: &Path, level: &str, message: &str) -> std::io::
     Ok(())
 }
 
+pub fn default_log_path() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        return parent.join(DEFAULT_LOG_FILE);
+    }
+    std::path::PathBuf::from(DEFAULT_LOG_FILE)
+}
+
 pub fn log_info(message: &str) {
-    let _ = log_message_to_file(Path::new(DEFAULT_LOG_FILE), "INFO", message);
+    let _ = log_message_to_file(&default_log_path(), "INFO", message);
 }
 
 pub fn log_error(message: &str) {
-    let _ = log_message_to_file(Path::new(DEFAULT_LOG_FILE), "ERROR", message);
+    let _ = log_message_to_file(&default_log_path(), "ERROR", message);
 }
 
 pub fn show_error_dialog(title: &str, message: &str) {

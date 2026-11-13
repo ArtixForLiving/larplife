@@ -289,8 +289,9 @@ fn main() {
     let (cmd_tx, cmd_rx) = channel();
     let (event_tx, event_rx) = channel();
 
+    let worker_config_path = config_path.clone();
     let worker_handle = thread::spawn(move || {
-        run_worker(cmd_rx, event_tx);
+        run_worker(worker_config_path, cmd_rx, event_tx);
     });
 
     if let Err(err) = run_tray_ui(cmd_tx.clone(), event_rx) {
