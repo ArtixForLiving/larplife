@@ -14,7 +14,6 @@ pub struct PresencePayload {
     pub small_text: Option<String>,
 }
 
-#[allow(dead_code)]
 pub fn format_fallback_details(app_name: &str, sanitized_details: &str) -> String {
     let trimmed_app = app_name.trim();
     let trimmed_details = sanitized_details.trim();
@@ -165,13 +164,13 @@ pub fn build_activity(payload: &PresencePayload) -> activity::Activity<'static> 
         if has_large {
             assets = assets.large_image(key_trimmed.to_string());
             if !text_trimmed.is_empty() {
-                assets = assets.large_text(text_trimmed.to_string());
+                assets = assets.large_text(format_discord_text(text_trimmed));
             }
         }
         if let Some(small_key) = small_image_trimmed {
             assets = assets.small_image(small_key.to_string());
             if let Some(small_txt) = small_text_trimmed {
-                assets = assets.small_text(small_txt.to_string());
+                assets = assets.small_text(format_discord_text(small_txt));
             }
         }
         activity = activity.assets(assets);
@@ -514,5 +513,24 @@ mod tests {
         let json = serde_json::to_value(build_activity(&payload))
             .expect("activity must serialize");
         assert!(json.get("assets").is_none());
+    }
+
+    #[test]
+    fn build_activity_formats_asset_texts_with_min_two_chars() {
+        let payload = PresencePayload {
+            discord_app_id: "1182390998877665544".to_string(),
+            details: "Coding".to_string(),
+            state: "Active".to_string(),
+            logo_key: "logo_key".to_string(),
+            logo_text: "X".to_string(),
+            start_timestamp: 1_700_000_000,
+            small_image: Some("small_badge".to_string()),
+            small_text: Some("Y".to_string()),
+        };
+
+        let json = serde_json::to_value(build_activity(&payload))
+            .expect("activity must serialize");
+        assert_eq!(json["assets"]["large_text"], "X ");
+        assert_eq!(json["assets"]["small_text"], "Y ");
     }
 }

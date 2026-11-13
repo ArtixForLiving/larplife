@@ -574,7 +574,10 @@ impl eframe::App for SettingsApp {
                         let cache_file = cache_path();
                         match fetch_detectable_apps(&cache_file, false) {
                             Ok(apps) => {
-                                let candidate = resolve_best_candidate(&proc_name, &apps);
+                                let query_path = resolve_exe_path(&proc_name)
+                                    .map(|p| p.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| proc_name.clone());
+                                let candidate = resolve_best_candidate(&query_path, &apps);
                                 let _ = tx.send(AsyncGuiEvent::CandidateResolved {
                                     app_idx,
                                     candidate,
@@ -625,12 +628,29 @@ impl eframe::App for SettingsApp {
                     match picked {
                         Some(path) => match std::fs::read(&path) {
                             Ok(bytes) => {
-                                let filename = path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("logo.png");
+                                let stem = path
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("logo");
+                                let ext = path
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("png");
+                                let safe_stem: String = stem
+                                    .chars()
+                                    .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                                    .collect();
+                                let safe_ext: String = ext
+                                    .chars()
+                                    .filter(|c| c.is_ascii_alphanumeric())
+                                    .collect();
+                                let filename = format!(
+                                    "{}.{}",
+                                    if safe_stem.is_empty() { "logo" } else { &safe_stem },
+                                    if safe_ext.is_empty() { "png" } else { &safe_ext }
+                                );
                                 let uploader = MultiHostUploader::new();
-                                match uploader.upload(&bytes, filename) {
+                                match uploader.upload(&bytes, &filename) {
                                     Ok(url) => {
                                         let _ =
                                             tx.send(AsyncGuiEvent::ImageUploaded { app_idx, url });
@@ -678,7 +698,7 @@ impl eframe::App for SettingsApp {
                                     Ok(icon_bytes) => {
                                         let safe_name = app_name
                                             .chars()
-                                            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                                            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
                                             .collect::<String>();
                                         let filename = if safe_name.is_empty() {
                                             "app_icon.png".to_string()

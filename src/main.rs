@@ -104,7 +104,11 @@ impl PresenceTracker {
         start_timestamp: i64,
     ) -> PresencePayload {
         let app_id = if app.discord_app_id.trim().is_empty() {
-            config.default_discord_app_id.trim().to_string()
+            if config.default_discord_app_id.trim().is_empty() {
+                crate::config::DEFAULT_LARPLIFE_APP_ID.to_string()
+            } else {
+                config.default_discord_app_id.trim().to_string()
+            }
         } else {
             app.discord_app_id.trim().to_string()
         };
@@ -529,6 +533,38 @@ mod tests {
                     payload.details,
                     "Obsidian — Daily Note 2026-11-13"
                 );
+            }
+            other => panic!("expected Set on cycle 1, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fallback_app_id_uses_default_constant_when_default_id_empty() {
+        let mut cfg = Config::default_presets();
+        cfg.default_discord_app_id = "   ".to_string();
+        cfg.apps.push(AppConfig {
+            app_name: "Obsidian".to_string(),
+            process_name: "Obsidian.exe".to_string(),
+            discord_app_id: "".to_string(),
+            logo_key: "".to_string(),
+            logo_text: "".to_string(),
+            default_details: "Taking notes".to_string(),
+            state_text: "Writing".to_string(),
+            hide_window_title: false,
+            keep_active_in_background: false,
+            strip_title_words: vec![],
+        });
+
+        let mut tracker = PresenceTracker::new();
+        let obs = ForegroundReading::Window(ActiveWindow {
+            process_name: "Obsidian.exe".to_string(),
+            window_title: "Daily Note 2026-11-13".to_string(),
+        });
+
+        let action = tracker.step(&cfg, obs, Instant::now(), 1000, |_| false);
+        match action {
+            TrackerAction::Set(payload) => {
+                assert_eq!(payload.discord_app_id, crate::config::DEFAULT_LARPLIFE_APP_ID);
             }
             other => panic!("expected Set on cycle 1, got {:?}", other),
         }

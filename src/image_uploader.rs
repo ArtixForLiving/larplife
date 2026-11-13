@@ -329,6 +329,7 @@ pub fn find_embedded_png(exe_bytes: &[u8]) -> Option<Vec<u8>> {
                                     bytes: png_slice.to_vec(),
                                 });
                                 valid_png = true;
+                                search_idx = end;
                             }
                             break;
                         }
@@ -339,9 +340,7 @@ pub fn find_embedded_png(exe_bytes: &[u8]) -> Option<Vec<u8>> {
             }
         }
 
-        if valid_png {
-            search_idx = offset;
-        } else {
+        if !valid_png {
             search_idx += 1;
         }
     }
@@ -355,35 +354,48 @@ pub fn find_embedded_png(exe_bytes: &[u8]) -> Option<Vec<u8>> {
 #[cfg(windows)]
 fn extract_icon_via_win32(exe_path: &Path) -> Result<Vec<u8>, String> {
     use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO,
         BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, HGDIOBJ, RGBQUAD,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
-    let wide_path: Vec<u16> = exe_path.as_os_str().encode_wide().collect();
-    if wide_path.is_empty() || wide_path.len() >= 260 {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn PrivateExtractIconsW(
+            szfilename: PCWSTR,
+            niconindex: i32,
+            cxicon: i32,
+            cyicon: i32,
+            phicon: *mut HICON,
+            piconid: *mut u32,
+            nicons: u32,
+            flags: u32,
+        ) -> u32;
+    }
+
+    let mut wide_path: Vec<u16> = exe_path.as_os_str().encode_wide().collect();
+    if wide_path.is_empty() {
         return Err(format!(
-            "Executable path length invalid for PrivateExtractIconsW: {}",
+            "Executable path cannot be empty: {}",
             exe_path.display()
         ));
     }
-    let mut path_buf = [0u16; 260];
-    path_buf[..wide_path.len()].copy_from_slice(&wide_path);
+    wide_path.push(0);
 
     let mut hicon_arr = [HICON::default()];
     let mut icon_id = 0u32;
 
     let mut count = unsafe {
         PrivateExtractIconsW(
-            &path_buf,
+            PCWSTR(wide_path.as_ptr()),
             0,
             256,
             256,
-            Some(&mut hicon_arr),
-            Some(&mut icon_id),
+            hicon_arr.as_mut_ptr(),
+            &mut icon_id,
+            1,
             0,
         )
     };
@@ -391,12 +403,13 @@ fn extract_icon_via_win32(exe_path: &Path) -> Result<Vec<u8>, String> {
     if count == 0 || hicon_arr[0].is_invalid() || hicon_arr[0].0.is_null() {
         count = unsafe {
             PrivateExtractIconsW(
-                &path_buf,
+                PCWSTR(wide_path.as_ptr()),
                 0,
                 0,
                 0,
-                Some(&mut hicon_arr),
-                Some(&mut icon_id),
+                hicon_arr.as_mut_ptr(),
+                &mut icon_id,
+                1,
                 0,
             )
         };

@@ -281,6 +281,7 @@ pub fn write_cache_file(cache_file: &Path, apps: &[DetectableApp]) -> Result<(),
 
 pub fn fetch_from_network(url: &str) -> Result<Vec<DetectableApp>, String> {
     let resp = ureq::get(url)
+        .set("User-Agent", "Larplife/0.3.0")
         .timeout(Duration::from_secs(10))
         .call()
         .map_err(|e| e.to_string())?;
